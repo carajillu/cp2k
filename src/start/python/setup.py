@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 #  vim: set ts=4 sw=4 tw=0 :
 
-from distutils.core import setup
-from distutils.extension import Extension
+from setuptools import setup, Extension
 
 import numpy
 
