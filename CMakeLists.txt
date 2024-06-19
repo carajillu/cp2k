@@ -1034,3 +1034,42 @@ install(
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/cp2k"
   FILES_MATCHING
   PATTERN "*.cmake")
+
+# Enable building Python bindings
+option(CP2K_BUILD_PYTHON_BINDINGS "Enable building of Python bindings" OFF)
+
+#if(CP2K_BUILD_PYTHON_BINDINGS)
+#    set(BUILD_PYTHON_BINDINGS_COMMAND 
+#        "env CC=${CMAKE_C_COMPILER} CFLAGS=${CMAKE_C_FLAGS} LDFLAGS=${CMAKE_EXE_LINKER_FLAGS} ${Python_EXECUTABLE} setup.py build_ext --verbose --build-temp=${CMAKE_BINARY_DIR}/python --build-lib=${CMAKE_BINARY_DIR}/python --library-dirs=/home/joan/local/cp2k/lib --libraries=cp2k"
+#    )
+#    add_custom_command(
+#        OUTPUT ${CMAKE_BINARY_DIR}/python/cp2k.cpython-310-x86_64-linux-gnu.so
+#        COMMAND ${CMAKE_COMMAND} -E echo "${BUILD_PYTHON_BINDINGS_COMMAND}"
+#        COMMAND ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER} CFLAGS=${CMAKE_C_FLAGS} LDFLAGS=${CMAKE_EXE_LINKER_FLAGS} ${Python_EXECUTABLE} setup.py build_ext --verbose --build-temp=${CMAKE_BINARY_DIR}/python --build-lib=${CMAKE_BINARY_DIR}/python --library-dirs=${CMAKE_INSTALL_PREFIX}/lib --libraries=cp2k
+#        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/start/python
+#        COMMENT "Building Python bindings"
+#        VERBATIM
+#    )
+
+#    add_custom_target(python-bindings ALL DEPENDS ${CMAKE_BINARY_DIR}/python/cp2k.cpython-310-x86_64-linux-gnu.so)
+#    add_dependencies(python-bindings cp2k)
+
+#    install(DIRECTORY ${CMAKE_BINARY_DIR}/python/ DESTINATION ${CMAKE_INSTALL_PREFIX}/python)
+#endif()
+
+if(CP2K_BUILD_PYTHON_BINDINGS)
+ set(BUILD_PYTHON_BINDINGS_COMMAND 
+        "env CC=${CMAKE_C_COMPILER} CFLAGS=${CMAKE_C_FLAGS} LDFLAGS=${CMAKE_EXE_LINKER_FLAGS} ${Python_EXECUTABLE} setup.py build_ext --verbose --build-temp=${CMAKE_BINARY_DIR}/python --build-lib=${CMAKE_BINARY_DIR}/python --library-dirs=/home/joan/local/cp2k/lib --libraries=cp2k"
+    )
+
+  add_custom_target(
+    python-bindings
+    #OUTPUT ${CMAKE_BINARY_DIR}/python/cp2k.cpython-310-x86_64-linux-gnu.so
+    COMMAND ${CMAKE_COMMAND} -E echo "${BUILD_PYTHON_BINDINGS_COMMAND}"
+    COMMAND ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER} CFLAGS=${CMAKE_C_FLAGS} LDFLAGS=${CMAKE_EXE_LINKER_FLAGS} ${Python_EXECUTABLE} setup.py build_ext --verbose --build-temp=${CMAKE_BINARY_DIR}/python --build-lib=${CMAKE_INSTALL_PREFIX}/lib --library-dirs=${CMAKE_INSTALL_PREFIX}/lib --libraries=cp2k
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/start/python
+    COMMENT "Building Python bindings"
+    VERBATIM
+    BYPRODUCTS ${post_configure_file})
+  install(DIRECTORY ${CMAKE_BINARY_DIR}/python/ DESTINATION ${CMAKE_INSTALL_PREFIX}/python)
+endif()
