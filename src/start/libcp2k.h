@@ -27,6 +27,7 @@ typedef int force_env_t;
  * \param str_length The size of the buffer (must be large enough)
  ******************************************************************************/
 void cp2k_get_version(char *version_str, int str_length);
+void cp2k_get_year(char *year_str, int str_length);
 
 /*******************************************************************************
  * \brief Initialize CP2K and MPI

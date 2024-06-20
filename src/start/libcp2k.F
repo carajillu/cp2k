@@ -24,7 +24,7 @@ MODULE libcp2k
                                               C_INT,&
                                               C_LONG,&
                                               C_NULL_CHAR
-   USE cp2k_info,                       ONLY: cp2k_version
+   USE cp2k_info,                       ONLY: cp2k_version, cp2k_year, cp2k_home
    USE cp2k_runs,                       ONLY: run_input
    USE cp_fm_types,                     ONLY: cp_fm_get_element
    USE f77_interface,                   ONLY: &
@@ -80,6 +80,23 @@ CONTAINS
       END DO
       version_str(n + 1) = C_NULL_CHAR
    END SUBROUTINE cp2k_get_version
+
+   SUBROUTINE cp2k_get_year(year_str, str_length) BIND(C)
+      CHARACTER(LEN=1, KIND=C_CHAR), INTENT(OUT)         :: year_str(*)
+      INTEGER(C_INT), VALUE                              :: str_length
+
+      INTEGER                                            :: i, n
+
+      n = LEN_TRIM(cp2k_year)
+      CPASSERT(str_length >= n + 1)
+      MARK_USED(str_length)
+
+      ! copy string
+      DO i = 1, n
+         year_str(i) = cp2k_year(i:i)
+      END DO
+      year_str(n + 1) = C_NULL_CHAR
+   END SUBROUTINE cp2k_get_year
 
 ! **************************************************************************************************
 !> \brief ...

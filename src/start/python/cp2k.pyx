@@ -9,6 +9,7 @@ cdef extern from "../libcp2k.h":
     ctypedef int force_env_t
 
     void cp2k_get_version(char* version_str, int str_length)
+    void cp2k_get_year(char* year_str, int str_length)
     void cp2k_init()
     void cp2k_init_without_mpi()
     void cp2k_finalize()
@@ -44,6 +45,22 @@ def get_version_string():
         PyMem_Free(data)
 
     return versionstr
+
+def get_year_string():
+    n = 255 * sizeof(char)
+
+    data = <char *>PyMem_Malloc(n)
+    if not data:
+        raise MemoryError()
+
+    yearstr = ''
+    try:
+        cp2k_get_year(data, n)
+        yearstr = data.decode('UTF-8')
+    finally:
+        PyMem_Free(data)
+
+    return yearstr
 
 def init(manage_mpi = True):
     if manage_mpi:
