@@ -17,9 +17,12 @@ MODULE mp2
                                               admm_uncorrect_for_eigenvalues
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind_set
-   USE bibliography,                    ONLY: DelBen2012,&
+   USE bibliography,                    ONLY: Bussy2023,&
+                                              DelBen2012,&
                                               DelBen2015b,&
                                               Rybkin2016,&
+                                              Stein2022,&
+                                              Stein2024,&
                                               cite_reference
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
@@ -33,7 +36,6 @@ MODULE mp2
                                               cp_fm_struct_release,&
                                               cp_fm_struct_type
    USE cp_fm_types,                     ONLY: cp_fm_create,&
-                                              cp_fm_get_info,&
                                               cp_fm_get_submatrix,&
                                               cp_fm_release,&
                                               cp_fm_set_all,&
@@ -50,7 +52,10 @@ MODULE mp2
    USE input_constants,                 ONLY: cholesky_inverse,&
                                               cholesky_off,&
                                               do_eri_gpw,&
-                                              do_eri_mme
+                                              do_eri_mme,&
+                                              rpa_exchange_axk,&
+                                              rpa_exchange_none,&
+                                              rpa_exchange_sosex
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type
@@ -116,8 +121,8 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'mp2_main'
 
       INTEGER :: bin, cholesky_method, dimen, handle, handle2, i, i_thread, iatom, ikind, irep, &
-         ispin, max_nset, my_bin_size, n_rep_hf, n_threads, nao, natom, ncol_block, ndep, &
-         nfullcols_total, nfullrows_total, nkind, nrow_block, nspins, unit_nr
+         ispin, max_nset, my_bin_size, n_rep_hf, n_threads, nao, natom, ndep, nfullcols_total, &
+         nfullrows_total, nkind, nspins, unit_nr
       INTEGER(KIND=int_8)                                :: mem
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: kind_of, nelec
       LOGICAL :: calc_ex, do_admm, do_admm_rpa_exx, do_dynamic_load_balancing, do_exx, do_gw, &
@@ -237,6 +242,9 @@ CONTAINS
       IF (calc_forces) THEN
          CALL cite_reference(DelBen2015b)
          CALL cite_reference(Rybkin2016)
+         CALL cite_reference(Stein2022)
+         CALL cite_reference(Bussy2023)
+         CALL cite_reference(Stein2024)
          !Gradients available for RI-MP2, and low-scaling Laplace MP2/RPA
 IF (.NOT. (mp2_env%method == ri_mp2_method_gpw .OR. mp2_env%method == ri_rpa_method_gpw .OR. mp2_env%method == ri_mp2_laplace)) THEN
             CPABORT("No forces/gradients for the selected method.")
@@ -325,8 +333,6 @@ IF (.NOT. (mp2_env%method == ri_mp2_method_gpw .OR. mp2_env%method == ri_rpa_met
       CALL cp_fm_set_all(matrix=fm_matrix_work, alpha=0.0_dp)
 
       CALL cp_fm_struct_release(fm_struct)
-
-      CALL cp_fm_get_info(matrix=fm_matrix_ks, nrow_block=nrow_block, ncol_block=ncol_block)
 
       IF (scf_env%cholesky_method == cholesky_off) THEN
          CALL cp_fm_power(fm_matrix_s, fm_matrix_work, -0.5_dp, scf_control%eps_eigval, ndep)
@@ -602,7 +608,7 @@ IF (.NOT. (mp2_env%method == ri_mp2_method_gpw .OR. mp2_env%method == ri_rpa_met
 
          ! Scale energy contributions
          Emp2 = Emp2*mp2_env%ri_rpa%scale_rpa
-         mp2_env%ri_rpa%ener_axk = mp2_env%ri_rpa%ener_axk*mp2_env%ri_rpa%scale_rpa
+         mp2_env%ri_rpa%ener_exchange = mp2_env%ri_rpa%ener_exchange*mp2_env%ri_rpa%scale_rpa
 
       CASE (ri_mp2_laplace)
          ! perform RI-SOS-Laplace-MP2 energy calculation, most part of the code in common
@@ -658,8 +664,10 @@ IF (.NOT. (mp2_env%method == ri_mp2_method_gpw .OR. mp2_env%method == ri_rpa_met
          IF (.NOT. update_xc_energy) Emp2 = 0.0_dp
 
          IF (unit_nr > 0 .AND. update_xc_energy) WRITE (unit_nr, '(T3,A,T56,F25.14)') 'RI-RPA energy  =   ', Emp2
-         IF (mp2_env%ri_rpa%do_ri_axk) THEN
-            IF (unit_nr > 0) WRITE (unit_nr, '(T3,A,T56,F25.14)') 'RI-RPA-AXK energy=', mp2_env%ri_rpa%ener_axk
+         IF (mp2_env%ri_rpa%exchange_correction == rpa_exchange_axk) THEN
+            IF (unit_nr > 0) WRITE (unit_nr, '(T3,A,T56,F25.14)') 'RI-RPA-AXK energy=', mp2_env%ri_rpa%ener_exchange
+         ELSE IF (mp2_env%ri_rpa%exchange_correction == rpa_exchange_sosex) THEN
+            IF (unit_nr > 0) WRITE (unit_nr, '(T3,A,T56,F25.14)') 'RI-RPA-SOSEX energy=', mp2_env%ri_rpa%ener_exchange
          END IF
          IF (mp2_env%ri_rpa%do_rse) THEN
             IF (unit_nr > 0) WRITE (unit_nr, '(T3,A,T56,F25.14)') 'Diagonal singles correction (dRSE) = ', &
@@ -672,8 +680,8 @@ IF (.NOT. (mp2_env%method == ri_mp2_method_gpw .OR. mp2_env%method == ri_rpa_met
       IF (unit_nr > 0) WRITE (unit_nr, *)
 
       ! we have it !!!!
-      IF (mp2_env%ri_rpa%do_ri_axk) THEN
-         Emp2 = Emp2 + mp2_env%ri_rpa%ener_axk
+      IF (mp2_env%ri_rpa%exchange_correction /= rpa_exchange_none) THEN
+         Emp2 = Emp2 + mp2_env%ri_rpa%ener_exchange
       END IF
       IF (mp2_env%ri_rpa%do_rse) THEN
          Emp2 = Emp2 + mp2_env%ri_rpa%rse_corr

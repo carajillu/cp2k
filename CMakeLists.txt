@@ -102,6 +102,7 @@ option(CP2K_ENABLE_CONSISTENCY_CHECKS
        OFF)
 option(CP2K_DEBUG_MODE "Enable several additional options for debugging cp2k."
        OFF)
+option(CP2K_USE_DFTD4 "Enable dispersion coorections DFTD4" OFF)
 option(CP2K_USE_SIRIUS "Enable plane wave dft calculations with sirius" OFF)
 option(CP2K_USE_FFTW3 "Use fftw3 for the calculating fast fourier transforms"
        ON)
@@ -192,6 +193,7 @@ endif()
 if(${cp2k_build_options_up} STREQUAL "FULL")
   set(CP2K_USE_FFTW3 ON)
   set(CP2K_USE_MPI ON)
+  set(CP2K_USE_DFTD4 ON)
   set(CP2K_USE_SIRIUS ON)
   set(CP2K_USE_LIBXSMM ON)
   set(CP2K_USE_VORI ON)
@@ -213,6 +215,7 @@ if(${cp2k_build_options_up} STREQUAL "SERIAL")
   set(CP2K_USE_FFTW3 ON)
   set(CP2K_USE_MPI OFF)
   set(CP2K_USE_SIRIUS ON)
+  set(CP2K_USE_SIRIUS ON)
   set(CP2K_USE_LIBXSMM ON)
   set(CP2K_USE_VORI ON)
   set(CP2K_USE_COSMA ON)
@@ -231,6 +234,7 @@ endif()
 if(${cp2k_build_options_up} STREQUAL "DEFAULT")
   set(CP2K_USE_FFTW3 ON)
   set(CP2K_USE_MPI ON)
+  set(CP2K_USE_SIRIUS ON)
   set(CP2K_USE_COSMA ON)
   set(CP2K_USE_LIBXSMM ON)
   set(CP2K_USE_LIBXC ON)
@@ -250,6 +254,7 @@ set(CP2K_SUPPORTED_CUDA_ARCHITECTURES
     P100
     V100
     A100
+    H100
     A40)
 set(CP2K_SUPPORTED_HIP_ARCHITECTURES
     Mi50
@@ -263,6 +268,7 @@ set(CP2K_SUPPORTED_HIP_ARCHITECTURES
     P100
     V100
     A100
+    H100
     A40)
 
 set(CP2K_WITH_GPU
@@ -276,7 +282,7 @@ set_property(
 
 set(CP2K_USE_ACCEL
     "NONE"
-    CACHE STRING "Set hardware acceleartion support: CUDA, HIP")
+    CACHE STRING "Set hardware acceleration support: CUDA, HIP")
 
 set_property(CACHE CP2K_USE_ACCEL
              PROPERTY STRINGS ${CP2K_SUPPORTED_ACCELERATION_TARGETS})
@@ -513,6 +519,7 @@ if((CP2K_USE_ACCEL MATCHES CUDA) OR (CP2K_USE_ACCEL MATCHES HIP))
   set(CP2K_GPU_ARCH_NUMBER_P100 60)
   set(CP2K_GPU_ARCH_NUMBER_V100 70)
   set(CP2K_GPU_ARCH_NUMBER_A100 80)
+  set(CP2K_GPU_ARCH_NUMBER_H100 90)
   set(CP2K_GPU_ARCH_NUMBER_A40 86)
   set(CP2K_GPU_ARCH_NUMBER_Mi50 gfx906)
   set(CP2K_GPU_ARCH_NUMBER_Mi100 gfx908)
@@ -711,8 +718,12 @@ if(CP2K_USE_SPLA)
     )
   endif()
 endif()
-# SIRIUS
 
+if(CP2K_USE_DFTD4)
+  find_package(dftd4 REQUIRED)
+endif()
+
+# SIRIUS
 if(CP2K_USE_SIRIUS)
   find_package(sirius REQUIRED)
 endif()
@@ -857,6 +868,12 @@ if(CP2K_USE_FFTW3)
           "    - libraries : ${CP2K_FFTW3_LINK_LIBRARIES}\n\n")
 endif()
 
+if(CP2K_USE_PLUMED)
+  message("  - PLUMED\n"
+          "    - include directories : ${CP2K_PLUMED_INCLUDE_DIRS}\n"
+          "    - libraries : ${CP2K_PLUMED_LINK_LIBRARIES}\n\n")
+endif()
+
 if(CP2K_USE_LIBXSMM)
   message(
     "  - libxsmm\n"
@@ -868,6 +885,13 @@ endif()
 if(CP2K_USE_SPLA)
   message(" - SPLA\n" "   - include directories : ${SPLA_INCLUDE_DIRS}\n"
           "   - lbraries : ${SPLA_LIBRARIES}\n\n")
+endif()
+
+if(CP2K_USE_DFTD4)
+  message(
+    " - DFTD4 :\n" "   - include modules     :  ${DFTD4_DFTD4};${DFTD4_MCTC}\n"
+    "   - include directories :  ${DFTD4_INCLUDE_DIR}\n"
+    "   - libraries           :  ${DFTD4_LIBDIR}\n\n")
 endif()
 
 if(CP2K_USE_SIRIUS)
@@ -938,6 +962,10 @@ if(NOT CP2K_USE_MPI)
   message("   - MPI")
 endif()
 
+if(NOT CP2K_USE_DFTD4)
+  message("   - DFTD4")
+endif()
+
 if(NOT CP2K_USE_SIRIUS)
   message("   - SIRIUS")
 endif()
@@ -966,7 +994,7 @@ if(NOT CP2K_USE_DLAF)
   message("   - DLAF")
 endif()
 
-if(NOT CP2K_USE_PLUMMED)
+if(NOT CP2K_USE_PLUMED)
   message("   - PLUMED")
 endif()
 

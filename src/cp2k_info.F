@@ -118,13 +118,10 @@ CONTAINS
       flags = TRIM(flags)//" elpa_intel_gpu"
 #endif
 #if defined(__parallel)
-      flags = TRIM(flags)//" parallel"
+      flags = TRIM(flags)//" parallel scalapack"
 #endif
 #if defined(__MPI_F08)
       flags = TRIM(flags)//" mpi_f08"
-#endif
-#if defined(__SCALAPACK)
-      flags = TRIM(flags)//" scalapack"
 #endif
 #if defined(__COSMA)
       flags = TRIM(flags)//" cosma"
@@ -208,6 +205,9 @@ CONTAINS
 #endif
 #if defined(__MKL)
       flags = TRIM(flags)//" mkl"
+#endif
+#if defined(__DFTD4)
+      flags = TRIM(flags)//" libdftd4"
 #endif
 #if defined(__SIRIUS)
       flags = TRIM(flags)//" sirius"

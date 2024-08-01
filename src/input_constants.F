@@ -53,7 +53,8 @@ MODULE input_constants
                                                do_mixed = 6, &
                                                do_embed = 7, &
                                                do_sirius = 8, &
-                                               do_nnp = 9
+                                               do_nnp = 9, &
+                                               do_ipi = 10
 
    ! QMMM
    REAL(KIND=dp), PARAMETER, PUBLIC         :: RADIUS_QMMM_DEFAULT = 0.80_dp, & ! Angstrom
@@ -594,7 +595,8 @@ MODULE input_constants
                                                xc_vdw_fun_nonloc = 102
    INTEGER, PARAMETER, PUBLIC               :: vdw_pairpot_dftd2 = 1, &
                                                vdw_pairpot_dftd3 = 2, &
-                                               vdw_pairpot_dftd3bj = 3
+                                               vdw_pairpot_dftd3bj = 3, &
+                                               vdw_pairpot_dftd4 = 4
    INTEGER, PARAMETER, PUBLIC               :: vdw_nl_DRSLL = 1, &
                                                vdw_nl_LMKLL = 2, &
                                                vdw_nl_RVV10 = 3
@@ -1053,6 +1055,10 @@ MODULE input_constants
                                                wfc_mm_style_gemm = 11, &
                                                wfc_mm_style_syrk = 12
 
+   ! RPA exchange corrections
+   INTEGER, PARAMETER, PUBLIC               :: rpa_exchange_none = 0, &
+                                               rpa_exchange_axk = 1, rpa_exchange_sosex = 2
+
    ! solvers of the z-vector equations
    INTEGER, PARAMETER, PUBLIC               :: z_solver_pople = 1, &
                                                z_solver_cg = 2, &
@@ -1082,7 +1088,10 @@ MODULE input_constants
                                                int_ldos_z = 21, &
                                                int_ldos_none = 22, &
                                                small_cell_full_kp = 31, &
-                                               large_cell_Gamma = 32
+                                               large_cell_Gamma = 32, &
+                                               G0W0 = 35, &
+                                               evGW0 = 36, &
+                                               evGW = 37
 
    ! periodic RESP parameters
    INTEGER, PARAMETER, PUBLIC               :: do_resp_x_dir = 0, &

@@ -20,13 +20,13 @@ cd "${BUILDDIR}"
 case "${with_cmake}" in
   __INSTALL__)
     echo "==================== Installing CMake ===================="
-    cmake_ver="3.29.0"
+    cmake_ver="3.30.0"
     if [ "${OPENBLAS_ARCH}" = "arm64" ]; then
       cmake_arch="linux-aarch64"
-      cmake_sha256="81eea0636f7e9488635a440ab9c5e3e8e4218d75d222bd60da1a114d39305fa8"
+      cmake_sha256="daa89552fd9102fb70399b31b5605c4f61125023bbbed947757a7b53ce36c4d0"
     elif [ "${OPENBLAS_ARCH}" = "x86_64" ]; then
       cmake_arch="linux-x86_64"
-      cmake_sha256="0cbbc2bf663977fe2f3c87d1cf493cd13856effa7d3d73f819b8c0e39f016349"
+      cmake_sha256="1a5969fe81fea6e5220d053d9d3e3754cbc85be07d2d428bebdcfe87137971a9"
     else
       report_error ${LINENO} \
         "cmake installation for ARCH=${ARCH} is not supported. You can try to use the system installation using the flag --with-cmake=system instead."

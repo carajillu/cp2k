@@ -35,7 +35,10 @@ def main() -> None:
         f.write(toolchain_full(base_image="fedora:38") + regtest("psmp"))
 
     with OutputFile(f"Dockerfile.test_intel-psmp", args.check) as f:
-        f.write(toolchain_intel() + regtest("psmp", intel=True))
+        f.write(
+            toolchain_intel()
+            + regtest("psmp", intel=True, testopts="--mpiexec mpiexec")
+        )
 
     with OutputFile(f"Dockerfile.test_nvhpc", args.check) as f:
         f.write(toolchain_nvhpc())
@@ -505,10 +508,7 @@ RUN ln -sf /usr/bin/gcc-{gcc_version}      /usr/local/bin/gcc  && \
 # ======================================================================================
 def toolchain_intel() -> str:
     return rf"""
-FROM intel/oneapi-hpckit:2024.0.1-devel-ubuntu22.04
-
-# Workaround expired key.
-RUN curl -sS https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor > /usr/share/keyrings/intel-oneapi-archive-keyring.gpg
+FROM intel/hpckit:2024.2.0-1-devel-ubuntu22.04
 
 """ + install_toolchain(
         base_image="ubuntu",
@@ -516,7 +516,6 @@ RUN curl -sS https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRO
         with_intelmpi="",
         with_mkl="",
         with_libtorch="no",
-        with_sirius="no",
     )
 
 

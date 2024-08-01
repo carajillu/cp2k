@@ -22,19 +22,23 @@ MODULE gw_utils
    USE cp_blacs_env,                    ONLY: cp_blacs_env_create,&
                                               cp_blacs_env_release,&
                                               cp_blacs_env_type
-   USE cp_cfm_diag,                     ONLY: cp_cfm_geeig_canon
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
                                               cp_cfm_release,&
+                                              cp_cfm_to_cfm,&
                                               cp_cfm_to_fm,&
-                                              cp_cfm_type,&
-                                              cp_fm_to_cfm
+                                              cp_cfm_type
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_dbcsr_api,                    ONLY: &
-        dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, dbcsr_p_type, dbcsr_set, &
-        dbcsr_type, dbcsr_type_antisymmetric, dbcsr_type_no_symmetry, dbcsr_type_symmetric
-   USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
+   USE cp_dbcsr_api,                    ONLY: dbcsr_create,&
+                                              dbcsr_distribution_release,&
+                                              dbcsr_distribution_type,&
+                                              dbcsr_p_type,&
+                                              dbcsr_release,&
+                                              dbcsr_set,&
+                                              dbcsr_type,&
+                                              dbcsr_type_no_symmetry
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
+                                              cp_dbcsr_dist2d_to_dist,&
                                               dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
    USE cp_files,                        ONLY: close_file,&
@@ -55,7 +59,10 @@ MODULE gw_utils
         dbt_clear, dbt_create, dbt_destroy, dbt_filter, dbt_iterator_blocks_left, &
         dbt_iterator_next_block, dbt_iterator_start, dbt_iterator_stop, dbt_iterator_type, &
         dbt_mp_environ_pgrid, dbt_pgrid_create, dbt_pgrid_destroy, dbt_pgrid_type, dbt_type
+   USE distribution_2d_types,           ONLY: distribution_2d_type
+   USE gw_communication,                ONLY: fm_to_local_array
    USE gw_integrals,                    ONLY: build_3c_integral_block
+   USE gw_kp_to_real_space_and_back,    ONLY: trafo_rs_to_ikp
    USE input_constants,                 ONLY: do_potential_truncated,&
                                               large_cell_Gamma,&
                                               ri_rpa_g0w0_crossing_newton,&
@@ -68,11 +75,11 @@ MODULE gw_utils
    USE kinds,                           ONLY: default_string_length,&
                                               dp,&
                                               int_8
-   USE kpoint_methods,                  ONLY: kpoint_init_cell_index,&
-                                              rskp_transform
+   USE kpoint_methods,                  ONLY: kpoint_init_cell_index
    USE kpoint_types,                    ONLY: get_kpoint_info,&
                                               kpoint_create,&
                                               kpoint_type
+   USE libint_2c_3c,                    ONLY: libint_potential_type
    USE libint_wrapper,                  ONLY: cp_libint_static_cleanup,&
                                               cp_libint_static_init
    USE machine,                         ONLY: m_memory,&
@@ -97,9 +104,8 @@ MODULE gw_utils
    USE particle_types,                  ONLY: particle_type
    USE physcon,                         ONLY: angstrom,&
                                               evolt
-   USE post_scf_bandstructure_types,    ONLY: band_edges_type,&
-                                              post_scf_bandstructure_type
-   USE post_scf_bandstructure_utils,    ONLY: get_fname
+   USE post_scf_bandstructure_types,    ONLY: post_scf_bandstructure_type
+   USE post_scf_bandstructure_utils,    ONLY: rsmat_to_kp
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_env_part_release,&
@@ -109,8 +115,11 @@ MODULE gw_utils
    USE qs_kind_types,                   ONLY: get_qs_kind,&
                                               qs_kind_type
    USE qs_ks_methods,                   ONLY: qs_ks_build_kohn_sham_matrix
-   USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
-   USE qs_tensors,                      ONLY: build_3c_integrals,&
+   USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type,&
+                                              release_neighbor_list_sets
+   USE qs_tensors,                      ONLY: build_2c_integrals,&
+                                              build_2c_neighbor_lists,&
+                                              build_3c_integrals,&
                                               build_3c_neighbor_lists,&
                                               get_tensor_occupancy,&
                                               neighbor_list_3c_destroy
@@ -126,9 +135,9 @@ MODULE gw_utils
 
    PRIVATE
 
-   PUBLIC :: create_and_init_bs_env_for_gw, de_init_bs_env, get_i_j_atoms, get_VBM_CBM_bandgaps, &
+   PUBLIC :: create_and_init_bs_env_for_gw, de_init_bs_env, get_i_j_atoms, &
              kpoint_init_cell_index_simple, compute_xkp, time_to_freq, analyt_conti_and_print, &
-             add_R, is_cell_in_index_to_cell
+             add_R, is_cell_in_index_to_cell, get_V_tr_R, power
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'gw_utils'
 
@@ -198,11 +207,11 @@ CONTAINS
 
          CALL setup_parallelization_Delta_R(bs_env)
 
-         CALL compute_cfm_mo_coeff_kp_and_eigenval_scf_kp(qs_env, bs_env)
-
          CALL allocate_matrices_small_cell_full_kp(qs_env, bs_env)
 
          CALL trafo_V_xc_R_to_kp(qs_env, bs_env)
+
+         CALL heuristic_RI_regularization(qs_env, bs_env)
 
       END SELECT
 
@@ -267,8 +276,11 @@ CONTAINS
 
       CALL section_vals_val_get(gw_sec, "NUM_TIME_FREQ_POINTS", i_val=bs_env%num_time_freq_points)
       CALL section_vals_val_get(gw_sec, "EPS_FILTER", r_val=bs_env%eps_filter)
+      CALL section_vals_val_get(gw_sec, "REGULARIZATION_RI", r_val=bs_env%input_regularization_RI)
+      CALL section_vals_val_get(gw_sec, "CUTOFF_RADIUS_RI", r_val=bs_env%ri_metric%cutoff_radius)
       CALL section_vals_val_get(gw_sec, "MEMORY_PER_PROC", r_val=bs_env%input_memory_per_proc_GB)
       CALL section_vals_val_get(gw_sec, "APPROX_KP_EXTRAPOL", l_val=bs_env%approx_kp_extrapol)
+      CALL section_vals_val_get(gw_sec, "HEDIN_SHIFT", l_val=bs_env%do_hedin_shift)
 
       CALL timestop(handle)
 
@@ -419,8 +431,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'setup_kpoints_chi_eps_W'
 
-      INTEGER                                            :: exp_two, handle, i_dim, n_dim, nkp, &
-                                                            nkp_extra, nkp_orig, u
+      INTEGER                                            :: handle, i_dim, n_dim, nkp, nkp_extra, &
+                                                            nkp_orig, u
       INTEGER, DIMENSION(3)                              :: nkp_grid, nkp_grid_extra, periodic
       REAL(KIND=dp)                                      :: exp_s_p, n_dim_inv
 
@@ -448,21 +460,15 @@ CONTAINS
 
             SELECT CASE (bs_env%small_cell_full_kp_or_large_cell_Gamma)
             CASE (large_cell_Gamma)
+
                nkp_grid(i_dim) = 4
                nkp_grid_extra(i_dim) = 6
+
             CASE (small_cell_full_kp)
-               ! for small cell, use the smallest 2^n x 2^m x 2^k k-mesh which is larger than
-               ! the SCF k-point grid; extrapolate with 2^(n+1) x 2^(m+1) x 2^(k+1) k-mesh
-               exp_two = 4
-               DO WHILE (.TRUE.)
-                  IF (exp_two > bs_env%kpoints_scf_desymm%nkp_grid(i_dim)) THEN
-                     nkp_grid(i_dim) = exp_two
-                     nkp_grid_extra(i_dim) = exp_two*2
-                     EXIT
-                  ELSE
-                     exp_two = exp_two*2
-                  END IF
-               END DO
+
+               nkp_grid(i_dim) = bs_env%kpoints_scf_desymm%nkp_grid(i_dim)*4
+               nkp_grid_extra(i_dim) = bs_env%kpoints_scf_desymm%nkp_grid(i_dim)*8
+
             END SELECT
 
          CASE DEFAULT
@@ -1303,6 +1309,11 @@ CONTAINS
       u = bs_env%unit_nr
       IF (u > 0) THEN
          WRITE (u, '(T2,A,I47)') 'Group size for tensor operations', bs_env%group_size_tensor
+         IF (bs_env%group_size_tensor > 1 .AND. bs_env%n_atom < 5) THEN
+            WRITE (u, '(T2,A)') 'The requested group size is > 1 which can lead to bad performance.'
+            WRITE (u, '(T2,A)') 'Using more memory per MPI process might improve performance.'
+            WRITE (u, '(T2,A)') '(Also increase MEMORY_PER_PROC when using more memory per process.)'
+         END IF
       END IF
 
       CALL timestop(handle)
@@ -1488,17 +1499,22 @@ CONTAINS
       ! resolution of the identity with the truncated Coulomb metric, cutoff radius 3 Angström
       bs_env%ri_metric%potential_type = do_potential_truncated
       bs_env%ri_metric%omega = 0.0_dp
-      ! cutoff radius = 3 Angström
-      bs_env%ri_metric%cutoff_radius = 3.0_dp/angstrom
+      ! cutoff radius is specified in the input
       bs_env%ri_metric%filename = "t_c_g.dat"
 
       bs_env%eps_eigval_mat_RI = 0.0_dp
 
-      ! for periodic systems, we use the regularized resolution of the identity
-      IF (SUM(bs_env%periodic) == 0) THEN
-         bs_env%regularization_RI = 0.0_dp
+      IF (bs_env%input_regularization_RI > -1.0E-12_dp) THEN
+         bs_env%regularization_RI = bs_env%input_regularization_RI
       ELSE
+         ! default case:
+
+         ! 1. for periodic systems, we use the regularized resolution of the identity per default
          bs_env%regularization_RI = 1.0E-2_dp
+
+         ! 2. for molecules, no regularization is necessary
+         IF (SUM(bs_env%periodic) == 0) bs_env%regularization_RI = 0.0_dp
+
       END IF
 
       ! truncated Coulomb operator for exchange self-energy
@@ -1517,6 +1533,10 @@ CONTAINS
       IF (u > 0) THEN
          WRITE (u, FMT="(T2,2A,F21.1,A)") "Cutoff radius for the truncated Coulomb ", &
             "operator in Σ^x:", bs_env%trunc_coulomb%cutoff_radius*angstrom, " Å"
+         WRITE (u, FMT="(T2,2A,F15.1,A)") "Cutoff radius for the truncated Coulomb ", &
+            "operator in RI metric:", bs_env%ri_metric%cutoff_radius*angstrom, " Å"
+         WRITE (u, FMT="(T2,A,ES48.1)") "Regularization parameter of RI ", bs_env%regularization_RI
+         WRITE (u, FMT="(T2,A,I53)") "Lattice sum size for V(k):", bs_env%size_lattice_sum_V
       END IF
 
       CALL timestop(handle)
@@ -1555,6 +1575,7 @@ CONTAINS
          WRITE (u, '(T2,A,I45)') 'Input: Number of time/freq. points', bs_env%num_time_freq_points
          WRITE (u, '(T2,A,ES27.1)') 'Input: Filter threshold for sparse tensor operations', &
             bs_env%eps_filter
+         WRITE (bs_env%unit_nr, FMT="(T2,A,L62)") "Apply Hedin shift", bs_env%do_hedin_shift
       END IF
 
       CALL timestop(handle)
@@ -1949,37 +1970,37 @@ CONTAINS
             IF (MODULO(cell_pair_count, bs_env%para_env%num_pe) .NE. bs_env%para_env%mepos) CYCLE
 
             DO atom_j = 1, bs_env%n_atom
-               DO atom_k = 1, bs_env%n_atom
-                  DO atom_i = 1, bs_env%n_atom
+            DO atom_k = 1, bs_env%n_atom
+            DO atom_i = 1, bs_env%n_atom
 
-                     j_size = bs_env%i_ao_end_from_atom(atom_j) - bs_env%i_ao_start_from_atom(atom_j) + 1
-                     k_size = bs_env%i_ao_end_from_atom(atom_k) - bs_env%i_ao_start_from_atom(atom_k) + 1
-                     i_size = bs_env%i_RI_end_from_atom(atom_i) - bs_env%i_RI_start_from_atom(atom_i) + 1
+               j_size = bs_env%i_ao_end_from_atom(atom_j) - bs_env%i_ao_start_from_atom(atom_j) + 1
+               k_size = bs_env%i_ao_end_from_atom(atom_k) - bs_env%i_ao_start_from_atom(atom_k) + 1
+               i_size = bs_env%i_RI_end_from_atom(atom_i) - bs_env%i_RI_start_from_atom(atom_i) + 1
 
-                     ALLOCATE (int_3c(j_size, k_size, i_size))
+               ALLOCATE (int_3c(j_size, k_size, i_size))
 
-                     ! compute 3-c int. ( μ(atom j) R , ν (atom k) S | P (atom i) 0 )
-                     ! ("|": truncated Coulomb operator), inside build_3c_integrals: (j k | i)
-                     CALL build_3c_integral_block(int_3c, qs_env, bs_env%ri_metric, &
-                                                  basis_j=bs_env%basis_set_AO, &
-                                                  basis_k=bs_env%basis_set_AO, &
-                                                  basis_i=bs_env%basis_set_RI, &
-                                                  cell_j=index_to_cell_3c_max(j_cell, 1:3), &
-                                                  cell_k=index_to_cell_3c_max(k_cell, 1:3), &
-                                                  atom_k=atom_k, atom_j=atom_j, atom_i=atom_i)
+               ! compute 3-c int. ( μ(atom j) R , ν (atom k) S | P (atom i) 0 )
+               ! ("|": truncated Coulomb operator), inside build_3c_integrals: (j k | i)
+               CALL build_3c_integral_block(int_3c, qs_env, bs_env%ri_metric, &
+                                            basis_j=bs_env%basis_set_AO, &
+                                            basis_k=bs_env%basis_set_AO, &
+                                            basis_i=bs_env%basis_set_RI, &
+                                            cell_j=index_to_cell_3c_max(j_cell, 1:3), &
+                                            cell_k=index_to_cell_3c_max(k_cell, 1:3), &
+                                            atom_k=atom_k, atom_j=atom_j, atom_i=atom_i)
 
-                     frobenius_norm = SQRT(SUM(int_3c(:, :, :)**2))
+               frobenius_norm = SQRT(SUM(int_3c(:, :, :)**2))
 
-                     DEALLOCATE (int_3c)
+               DEALLOCATE (int_3c)
 
-                     ! we use a higher threshold here to safe memory when storing the 3c integrals
-                     ! in every tensor group
-                     IF (frobenius_norm > eps) THEN
-                        nblocks_3c_max(j_cell, k_cell) = nblocks_3c_max(j_cell, k_cell) + 1
-                     END IF
+               ! we use a higher threshold here to safe memory when storing the 3c integrals
+               ! in every tensor group
+               IF (frobenius_norm > eps) THEN
+                  nblocks_3c_max(j_cell, k_cell) = nblocks_3c_max(j_cell, k_cell) + 1
+               END IF
 
-                  END DO
-               END DO
+            END DO
+            END DO
             END DO
 
          END DO
@@ -2615,164 +2636,6 @@ CONTAINS
 !> \param qs_env ...
 !> \param bs_env ...
 ! **************************************************************************************************
-   SUBROUTINE compute_cfm_mo_coeff_kp_and_eigenval_scf_kp(qs_env, bs_env)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_cfm_mo_coeff_kp_and_eigenval_scf_kp'
-
-      INTEGER                                            :: handle, ikp, ispin, nkp_bs_and_DOS, re_im
-      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index_scf
-      REAL(KIND=dp)                                      :: CBM, VBM
-      REAL(KIND=dp), DIMENSION(3)                        :: xkp
-      TYPE(cp_cfm_type)                                  :: cfm_ks, cfm_mos, cfm_s
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ks, matrix_s
-      TYPE(kpoint_type), POINTER                         :: kpoints_scf
-      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER                                         :: sab_nl
-
-      CALL timeset(routineN, handle)
-
-      CALL get_qs_env(qs_env, &
-                      matrix_ks_kp=matrix_ks, &
-                      matrix_s_kp=matrix_s, &
-                      kpoints=kpoints_scf)
-
-      NULLIFY (sab_nl)
-      CALL get_kpoint_info(kpoints_scf, sab_nl=sab_nl, cell_to_index=cell_to_index_scf)
-
-      CALL cp_cfm_create(cfm_ks, bs_env%cfm_work_mo%matrix_struct)
-      CALL cp_cfm_create(cfm_s, bs_env%cfm_work_mo%matrix_struct)
-      CALL cp_cfm_create(cfm_mos, bs_env%cfm_work_mo%matrix_struct)
-
-      ! nkp_bs_and_DOS contains desymmetrized k-point mesh from SCF and k-points from GW bandstructure
-      nkp_bs_and_DOS = bs_env%nkp_bs_and_DOS
-
-      ALLOCATE (bs_env%eigenval_G0W0(bs_env%n_ao, nkp_bs_and_DOS, bs_env%n_spin))
-      ALLOCATE (bs_env%eigenval_HF(bs_env%n_ao, nkp_bs_and_DOS, bs_env%n_spin))
-      ALLOCATE (bs_env%fm_mo_coeff_kp(nkp_bs_and_DOS, bs_env%n_spin, 2))
-      ALLOCATE (bs_env%fm_ks_kp(nkp_bs_and_DOS, bs_env%n_spin, 2))
-      ALLOCATE (bs_env%fm_s_kp(nkp_bs_and_DOS, bs_env%n_spin, 2))
-      DO ikp = 1, nkp_bs_and_DOS
-         DO ispin = 1, bs_env%n_spin
-            DO re_im = 1, 2
-               CALL cp_fm_create(bs_env%fm_mo_coeff_kp(ikp, ispin, re_im), &
-                                 bs_env%cfm_work_mo%matrix_struct)
-               CALL cp_fm_create(bs_env%fm_ks_kp(ikp, ispin, re_im), &
-                                 bs_env%cfm_work_mo%matrix_struct)
-               CALL cp_fm_create(bs_env%fm_s_kp(ikp, ispin, re_im), &
-                                 bs_env%cfm_work_mo%matrix_struct)
-            END DO
-         END DO
-      END DO
-
-      DO ispin = 1, bs_env%n_spin
-         DO ikp = 1, nkp_bs_and_DOS
-
-            xkp(1:3) = bs_env%kpoints_DOS%xkp(1:3, ikp)
-
-            ! h^KS^R -> h^KS(k)
-            CALL rsmat_to_kp(matrix_ks, ispin, xkp, cell_to_index_scf, sab_nl, bs_env, cfm_ks)
-
-            ! S^R -> S(k)
-            CALL rsmat_to_kp(matrix_s, 1, xkp, cell_to_index_scf, sab_nl, bs_env, cfm_s)
-
-            ! JW comment: one might remove h^KS(k) again later
-            ! we store the complex KS matrix as fm matrix because the infrastructure for fm is
-            ! much nicer compared to cfm
-            CALL cp_cfm_to_fm(cfm_ks, &
-                              bs_env%fm_ks_kp(ikp, ispin, 1), &
-                              bs_env%fm_ks_kp(ikp, ispin, 2))
-            CALL cp_cfm_to_fm(cfm_s, &
-                              bs_env%fm_s_kp(ikp, ispin, 1), &
-                              bs_env%fm_s_kp(ikp, ispin, 2))
-
-            ! Diagonalize KS-matrix via Rothaan-Hall equation:
-            ! H^KS(k) C(k) = S(k) C(k) ε(k)
-            CALL cp_cfm_geeig_canon(cfm_ks, cfm_s, cfm_mos, &
-                                    bs_env%eigenval_scf(:, ikp, ispin), &
-                                    bs_env%cfm_work_mo, bs_env%eps_eigval_mat_s)
-
-            ! we store the complex MO coeff as fm matrix because the infrastructure for fm is
-            ! much nicer compared to cfm
-            CALL cp_cfm_to_fm(cfm_mos, &
-                              bs_env%fm_mo_coeff_kp(ikp, ispin, 1), &
-                              bs_env%fm_mo_coeff_kp(ikp, ispin, 2))
-
-         END DO
-
-         VBM = MAXVAL(bs_env%eigenval_scf(bs_env%n_occ(ispin), :, ispin))
-         CBM = MINVAL(bs_env%eigenval_scf(bs_env%n_occ(ispin) + 1, :, ispin))
-
-         bs_env%e_fermi(ispin) = 0.5_dp*(VBM + CBM)
-
-      END DO
-
-      CALL cp_cfm_release(cfm_ks)
-      CALL cp_cfm_release(cfm_s)
-      CALL cp_cfm_release(cfm_mos)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE compute_cfm_mo_coeff_kp_and_eigenval_scf_kp
-
-! **************************************************************************************************
-!> \brief ...
-!> \param matrix_ks ...
-!> \param ispin ...
-!> \param xkp ...
-!> \param cell_to_index_scf ...
-!> \param sab_nl ...
-!> \param bs_env ...
-!> \param cfm_ks ...
-! **************************************************************************************************
-   SUBROUTINE rsmat_to_kp(matrix_ks, ispin, xkp, cell_to_index_scf, sab_nl, bs_env, cfm_ks)
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ks
-      INTEGER                                            :: ispin
-      REAL(KIND=dp), DIMENSION(3)                        :: xkp
-      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index_scf
-      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER                                         :: sab_nl
-      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
-      TYPE(cp_cfm_type)                                  :: cfm_ks
-
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'rsmat_to_kp'
-
-      INTEGER                                            :: handle
-      TYPE(dbcsr_type), POINTER                          :: cmat, nsmat, rmat
-
-      CALL timeset(routineN, handle)
-
-      ALLOCATE (rmat, cmat, nsmat)
-      CALL dbcsr_create(rmat, template=matrix_ks(1, 1)%matrix, matrix_type=dbcsr_type_symmetric)
-      CALL dbcsr_create(cmat, template=matrix_ks(1, 1)%matrix, matrix_type=dbcsr_type_antisymmetric)
-      CALL dbcsr_create(nsmat, template=matrix_ks(1, 1)%matrix, matrix_type=dbcsr_type_no_symmetry)
-      CALL cp_dbcsr_alloc_block_from_nbl(rmat, sab_nl)
-      CALL cp_dbcsr_alloc_block_from_nbl(cmat, sab_nl)
-
-      CALL dbcsr_set(rmat, 0.0_dp)
-      CALL dbcsr_set(cmat, 0.0_dp)
-      CALL rskp_transform(rmatrix=rmat, cmatrix=cmat, rsmat=matrix_ks, ispin=ispin, &
-                          xkp=xkp, cell_to_index=cell_to_index_scf, sab_nl=sab_nl)
-      CALL dbcsr_desymmetrize(rmat, nsmat)
-      CALL copy_dbcsr_to_fm(nsmat, bs_env%fm_work_mo(1))
-      CALL dbcsr_desymmetrize(cmat, nsmat)
-      CALL copy_dbcsr_to_fm(nsmat, bs_env%fm_work_mo(2))
-      CALL cp_fm_to_cfm(bs_env%fm_work_mo(1), bs_env%fm_work_mo(2), cfm_ks)
-
-      CALL dbcsr_deallocate_matrix(rmat)
-      CALL dbcsr_deallocate_matrix(cmat)
-      CALL dbcsr_deallocate_matrix(nsmat)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE rsmat_to_kp
-
-! **************************************************************************************************
-!> \brief ...
-!> \param qs_env ...
-!> \param bs_env ...
-! **************************************************************************************************
    SUBROUTINE allocate_matrices_small_cell_full_kp(qs_env, bs_env)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
@@ -2872,8 +2735,7 @@ CONTAINS
                              cell_to_index_scf, sab_nl, bs_env, cfm_V_xc)
 
             ! get C_µn(k)
-            CALL cp_fm_to_cfm(bs_env%fm_mo_coeff_kp(ikp, ispin, 1), &
-                              bs_env%fm_mo_coeff_kp(ikp, ispin, 2), cfm_mo_coeff)
+            CALL cp_cfm_to_cfm(bs_env%cfm_mo_coeff_kp(ikp, ispin), cfm_mo_coeff)
 
             ! v^xc_nm(k_i) = sum_µν C^*_µn(k_i) v^xc_µν(k_i) C_νn(k_i)
             CALL parallel_gemm('N', 'N', n_ao, n_ao, n_ao, z_one, cfm_V_xc, cfm_mo_coeff, &
@@ -2900,6 +2762,251 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE trafo_V_xc_R_to_kp
+
+! **************************************************************************************************
+!> \brief ...
+!> \param qs_env ...
+!> \param bs_env ...
+! **************************************************************************************************
+   SUBROUTINE heuristic_RI_regularization(qs_env, bs_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'heuristic_RI_regularization'
+
+      COMPLEX(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)  :: M
+      INTEGER                                            :: handle, ikp, ikp_local, n_RI, nkp, &
+                                                            nkp_local, u
+      REAL(KIND=dp)                                      :: cond_nr, cond_nr_max, max_ev, &
+                                                            max_ev_ikp, min_ev, min_ev_ikp
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: M_R
+
+      CALL timeset(routineN, handle)
+
+      ! compute M^R_PQ = <phi_P,0|V^tr(rc)|phi_Q,R> for RI metric
+      CALL get_V_tr_R(M_R, bs_env%ri_metric, 0.0_dp, bs_env, qs_env)
+
+      nkp = bs_env%nkp_chi_eps_W_orig_plus_extra
+      n_RI = bs_env%n_RI
+
+      nkp_local = 0
+      DO ikp = 1, nkp
+         ! trivial parallelization over k-points
+         IF (MODULO(ikp, bs_env%para_env%num_pe) .NE. bs_env%para_env%mepos) CYCLE
+         nkp_local = nkp_local + 1
+      END DO
+
+      ALLOCATE (M(n_RI, n_RI, nkp_local))
+
+      ikp_local = 0
+      cond_nr_max = 0.0_dp
+      min_ev = 1000.0_dp
+      max_ev = -1000.0_dp
+
+      DO ikp = 1, nkp
+
+         ! trivial parallelization
+         IF (MODULO(ikp, bs_env%para_env%num_pe) .NE. bs_env%para_env%mepos) CYCLE
+
+         ikp_local = ikp_local + 1
+
+         ! M(k) = sum_R e^ikR M^R
+         CALL trafo_rs_to_ikp(M_R, M(:, :, ikp_local), &
+                              bs_env%kpoints_scf_desymm%index_to_cell, &
+                              bs_env%kpoints_chi_eps_W%xkp(1:3, ikp))
+
+         ! compute condition number of M_PQ(k)
+         CALL power(M(:, :, ikp_local), 1.0_dp, 0.0_dp, cond_nr, min_ev_ikp, max_ev_ikp)
+
+         IF (cond_nr > cond_nr_max) cond_nr_max = cond_nr
+         IF (max_ev_ikp > max_ev) max_ev = max_ev_ikp
+         IF (min_ev_ikp < min_ev) min_ev = min_ev_ikp
+
+      END DO ! ikp
+
+      CALL bs_env%para_env%max(cond_nr_max)
+
+      u = bs_env%unit_nr
+      IF (u > 0) THEN
+         WRITE (u, FMT="(T2,A,ES34.1)") "Min. abs. eigenvalue of RI metric matrix M(k)", min_ev
+         WRITE (u, FMT="(T2,A,ES34.1)") "Max. abs. eigenvalue of RI metric matrix M(k)", max_ev
+         WRITE (u, FMT="(T2,A,ES50.1)") "Max. condition number of M(k)", cond_nr_max
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE heuristic_RI_regularization
+
+! **************************************************************************************************
+!> \brief ...
+!> \param V_tr_R ...
+!> \param pot_type ...
+!> \param regularization_RI ...
+!> \param bs_env ...
+!> \param qs_env ...
+! **************************************************************************************************
+   SUBROUTINE get_V_tr_R(V_tr_R, pot_type, regularization_RI, bs_env, qs_env)
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: V_tr_R
+      TYPE(libint_potential_type)                        :: pot_type
+      REAL(KIND=dp)                                      :: regularization_RI
+      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'get_V_tr_R'
+
+      INTEGER                                            :: handle, img, nimages_scf_desymm
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: sizes_RI
+      INTEGER, DIMENSION(:), POINTER                     :: col_bsize, row_bsize
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: fm_V_tr_R
+      TYPE(dbcsr_distribution_type)                      :: dbcsr_dist
+      TYPE(dbcsr_type), ALLOCATABLE, DIMENSION(:)        :: mat_V_tr_R
+      TYPE(distribution_2d_type), POINTER                :: dist_2d
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         POINTER                                         :: sab_RI
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (sab_RI, dist_2d)
+
+      CALL get_qs_env(qs_env=qs_env, &
+                      blacs_env=blacs_env, &
+                      distribution_2d=dist_2d, &
+                      qs_kind_set=qs_kind_set, &
+                      particle_set=particle_set)
+
+      ALLOCATE (sizes_RI(bs_env%n_atom))
+      CALL get_particle_set(particle_set, qs_kind_set, nsgf=sizes_RI, basis=bs_env%basis_set_RI)
+      CALL build_2c_neighbor_lists(sab_RI, bs_env%basis_set_RI, bs_env%basis_set_RI, &
+                                   pot_type, "2c_nl_RI", qs_env, sym_ij=.FALSE., &
+                                   dist_2d=dist_2d)
+      CALL cp_dbcsr_dist2d_to_dist(dist_2d, dbcsr_dist)
+      ALLOCATE (row_bsize(SIZE(sizes_RI)))
+      ALLOCATE (col_bsize(SIZE(sizes_RI)))
+      row_bsize(:) = sizes_RI
+      col_bsize(:) = sizes_RI
+
+      nimages_scf_desymm = bs_env%nimages_scf_desymm
+      ALLOCATE (mat_V_tr_R(nimages_scf_desymm))
+      CALL dbcsr_create(mat_V_tr_R(1), "(RI|RI)", dbcsr_dist, dbcsr_type_no_symmetry, &
+                        row_bsize, col_bsize)
+      DEALLOCATE (row_bsize, col_bsize)
+
+      DO img = 2, nimages_scf_desymm
+         CALL dbcsr_create(mat_V_tr_R(img), template=mat_V_tr_R(1))
+      END DO
+
+      CALL build_2c_integrals(mat_V_tr_R, 0.0_dp, qs_env, sab_RI, bs_env%basis_set_RI, &
+                              bs_env%basis_set_RI, pot_type, do_kpoints=.TRUE., &
+                              ext_kpoints=bs_env%kpoints_scf_desymm, &
+                              regularization_RI=regularization_RI)
+
+      ALLOCATE (fm_V_tr_R(nimages_scf_desymm))
+      DO img = 1, nimages_scf_desymm
+         CALL cp_fm_create(fm_V_tr_R(img), bs_env%fm_RI_RI%matrix_struct)
+         CALL copy_dbcsr_to_fm(mat_V_tr_R(img), fm_V_tr_R(img))
+         CALL dbcsr_release(mat_V_tr_R(img))
+      END DO
+
+      IF (.NOT. ALLOCATED(V_tr_R)) THEN
+         ALLOCATE (V_tr_R(bs_env%n_RI, bs_env%n_RI, nimages_scf_desymm))
+      END IF
+
+      CALL fm_to_local_array(fm_V_tr_R, V_tr_R)
+
+      CALL cp_fm_release(fm_V_tr_R)
+      CALL dbcsr_distribution_release(dbcsr_dist)
+      CALL release_neighbor_list_sets(sab_RI)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE get_V_tr_R
+
+! **************************************************************************************************
+!> \brief ...
+!> \param matrix ...
+!> \param exponent ...
+!> \param eps ...
+!> \param cond_nr ...
+!> \param min_ev ...
+!> \param max_ev ...
+! **************************************************************************************************
+   SUBROUTINE power(matrix, exponent, eps, cond_nr, min_ev, max_ev)
+      COMPLEX(KIND=dp), DIMENSION(:, :)                  :: matrix
+      REAL(KIND=dp)                                      :: exponent, eps
+      REAL(KIND=dp), OPTIONAL                            :: cond_nr, min_ev, max_ev
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'power'
+
+      COMPLEX(KIND=dp), ALLOCATABLE, DIMENSION(:, :)     :: eigenvectors
+      COMPLEX(KIND=dp), DIMENSION(:), POINTER            :: work
+      COMPLEX(KIND=dp), DIMENSION(:, :), POINTER         :: A
+      INTEGER                                            :: handle, i, info, liwork, lrwork, lwork, n
+      INTEGER, DIMENSION(:), POINTER                     :: iwork
+      REAL(KIND=dp)                                      :: pos_eval
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: eigenvalues
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: rwork
+
+      CALL timeset(routineN, handle)
+
+      ! code by Ole Schütt
+      IF (SIZE(matrix, 1) /= SIZE(matrix, 2)) CPABORT("expected square matrix")
+
+      ! make matrix perfectly Hermitian
+      matrix(:, :) = 0.5_dp*(matrix(:, :) + CONJG(TRANSPOSE(matrix(:, :))))
+
+      n = SIZE(matrix, 1)
+      ALLOCATE (iwork(1), rwork(1), work(1), A(n, n), eigenvalues(n), eigenvectors(n, n))
+
+      A(:, :) = matrix ! ZHEEVD will overwrite A
+      ! work space query
+      lwork = -1
+      lrwork = -1
+      liwork = -1
+
+      CALL ZHEEVD('V', 'U', n, A(1, 1), n, eigenvalues(1), &
+                  work(1), lwork, rwork(1), lrwork, iwork(1), liwork, info)
+      lwork = INT(REAL(work(1), dp))
+      lrwork = INT(REAL(rwork(1), dp))
+      liwork = iwork(1)
+
+      DEALLOCATE (iwork, rwork, work)
+      ALLOCATE (iwork(liwork))
+      iwork(:) = 0
+      ALLOCATE (rwork(lrwork))
+      rwork(:) = 0.0_dp
+      ALLOCATE (work(lwork))
+      work(:) = CMPLX(0.0_dp, 0.0_dp, KIND=dp)
+
+      CALL ZHEEVD('V', 'U', n, A(1, 1), n, eigenvalues(1), &
+                  work(1), lwork, rwork(1), lrwork, iwork(1), liwork, info)
+
+      eigenvectors(:, :) = A(:, :)
+
+      IF (info /= 0) CPABORT("diagonalization failed")
+
+      IF (PRESENT(cond_nr)) cond_nr = MAXVAL(ABS(eigenvalues))/MINVAL(ABS(eigenvalues))
+      IF (PRESENT(min_ev)) min_ev = MINVAL(ABS(eigenvalues))
+      IF (PRESENT(max_ev)) max_ev = MAXVAL(ABS(eigenvalues))
+
+      DO i = 1, n
+         IF (eigenvalues(i) > eps) THEN
+            pos_eval = (eigenvalues(i))**(0.5_dp*exponent)
+         ELSE
+            pos_eval = 0.0_dp
+         END IF
+         eigenvectors(:, i) = eigenvectors(:, i)*pos_eval
+      END DO
+
+      CALL ZGEMM("N", "C", n, n, n, z_one, eigenvectors, n, eigenvectors, n, z_zero, matrix, n)
+
+      DEALLOCATE (iwork, rwork, work, A, eigenvalues, eigenvectors)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE power
 
 ! **************************************************************************************************
 !> \brief ...
@@ -2983,7 +3090,7 @@ CONTAINS
 
       CHARACTER(len=3)                                   :: occ_vir
       CHARACTER(len=default_string_length)               :: fname
-      INTEGER                                            :: handle, i_mo, ikp_for_filename, iunit, &
+      INTEGER                                            :: handle, i_mo, ikp_for_print, iunit, &
                                                             n_mo, nkp
       LOGICAL                                            :: is_bandstruc_kpoint, print_DOS_kpoints, &
                                                             print_ikp
@@ -3005,10 +3112,10 @@ CONTAINS
                                 Sigma_c_ikp_n_freq(:, 1:bs_env%num_freq_points_fit, 1)*z_one + &
                                 Sigma_c_ikp_n_freq(:, 1:bs_env%num_freq_points_fit, 2)*gaussi, &
                                 Sigma_x_ikp_n(:) - V_xc_ikp_n(:), &
-                                eigenval_scf(:), &
-                                eigenval_scf(:), &
-                                i_mo, bs_env%n_occ(ispin), bs_env%nparam_pade, &
-                                bs_env%num_freq_points_fit, &
+                                eigenval_scf(:), eigenval_scf(:), &
+                                bs_env%do_hedin_shift, &
+                                i_mo, bs_env%n_occ(ispin), bs_env%n_vir(ispin), &
+                                bs_env%nparam_pade, bs_env%num_freq_points_fit, &
                                 ri_rpa_g0w0_crossing_newton, bs_env%n_occ(ispin), &
                                 0.0_dp, .TRUE., .FALSE., 1, e_fermi_ext=bs_env%e_fermi(ispin))
       END DO
@@ -3034,34 +3141,42 @@ CONTAINS
 
          IF (print_DOS_kpoints) THEN
             nkp = bs_env%nkp_only_DOS
-            ikp_for_filename = ikp
+            ikp_for_print = ikp
          ELSE
             nkp = bs_env%nkp_only_bs
-            ikp_for_filename = ikp - bs_env%nkp_only_DOS
+            ikp_for_print = ikp - bs_env%nkp_only_DOS
          END IF
 
-         CALL get_fname(fname, bs_env, ikp_for_filename, nkp, "SCF_and_G0W0", ispin=ispin)
+         fname = "bandstructure_SCF_and_G0W0"
 
-         CALL open_file(TRIM(fname), unit_number=iunit, file_status="REPLACE", file_action="WRITE")
+         IF (ikp_for_print == 1) THEN
+            CALL open_file(TRIM(fname), unit_number=iunit, file_status="REPLACE", &
+                           file_action="WRITE")
+         ELSE
+            CALL open_file(TRIM(fname), unit_number=iunit, file_status="OLD", &
+                           file_action="WRITE", file_position="APPEND")
+         END IF
 
          WRITE (iunit, "(A)") " "
-
-         WRITE (iunit, "(A10,3F10.4)") "kpoint: ", bs_env%kpoints_DOS%xkp(:, ikp)
+         WRITE (iunit, "(A10,I7,A25,3F10.4)") "kpoint: ", ikp_for_print, "coordinate: ", &
+            bs_env%kpoints_DOS%xkp(:, ikp)
          WRITE (iunit, "(A)") " "
-         WRITE (iunit, "(A5,A24,2A17,A16,A18)") "n", "ϵ_nk^DFT (eV)", "Σ^c_nk (eV)", &
+         WRITE (iunit, "(A5,A12,3A17,A16,A18)") "n", "k", "ϵ_nk^DFT (eV)", "Σ^c_nk (eV)", &
             "Σ^x_nk (eV)", "v_nk^xc (eV)", "ϵ_nk^G0W0 (eV)"
          WRITE (iunit, "(A)") " "
 
          DO i_mo = 1, n_mo
             IF (i_mo .LE. bs_env%n_occ(ispin)) occ_vir = 'occ'
             IF (i_mo > bs_env%n_occ(ispin)) occ_vir = 'vir'
-            WRITE (iunit, "(I5,3A,4F16.3,F17.3)") i_mo, ' (', occ_vir, ') ', &
+            WRITE (iunit, "(I5,3A,I5,4F16.3,F17.3)") i_mo, ' (', occ_vir, ') ', ikp_for_print, &
                eigenval_scf(i_mo)*evolt, &
                Sigma_c_ikp_n_qp(i_mo)*evolt, &
                Sigma_x_ikp_n(i_mo)*evolt, &
                V_xc_ikp_n(i_mo)*evolt, &
                bs_env%eigenval_G0W0(i_mo, ikp, ispin)*evolt
          END DO
+
+         WRITE (iunit, "(A)") " "
 
          CALL close_file(iunit)
 
@@ -3129,87 +3244,5 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE correct_obvious_fitting_fails
-
-! **************************************************************************************************
-!> \brief ...
-!> \param bs_env ...
-! **************************************************************************************************
-   SUBROUTINE get_VBM_CBM_bandgaps(bs_env)
-
-      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'get_VBM_CBM_bandgaps'
-
-      INTEGER                                            :: handle
-
-      CALL timeset(routineN, handle)
-
-      CALL get_VBM_CBM_bandgaps_single(bs_env%band_edges_scf, bs_env%eigenval_scf, bs_env)
-      CALL get_VBM_CBM_bandgaps_single(bs_env%band_edges_G0W0, bs_env%eigenval_G0W0, bs_env)
-      CALL get_VBM_CBM_bandgaps_single(bs_env%band_edges_HF, bs_env%eigenval_HF, bs_env)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE get_VBM_CBM_bandgaps
-
-! **************************************************************************************************
-!> \brief ...
-!> \param band_edges ...
-!> \param ev ...
-!> \param bs_env ...
-! **************************************************************************************************
-   SUBROUTINE get_VBM_CBM_bandgaps_single(band_edges, ev, bs_env)
-      TYPE(band_edges_type)                              :: band_edges
-      REAL(KIND=dp), DIMENSION(:, :, :)                  :: ev
-      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'get_VBM_CBM_bandgaps_single'
-
-      INTEGER                                            :: handle, homo, homo_1, homo_2, ikp, &
-                                                            ispin, lumo, lumo_1, lumo_2, n_mo
-      REAL(KIND=dp)                                      :: E_DBG_at_ikp
-
-      CALL timeset(routineN, handle)
-
-      n_mo = bs_env%n_ao
-
-      band_edges%DBG = 1000.0_dp
-
-      SELECT CASE (bs_env%n_spin)
-      CASE (1)
-         homo = bs_env%n_occ(1)
-         lumo = homo + 1
-         band_edges%VBM = MAXVAL(ev(1:homo, :, 1))
-         band_edges%CBM = MINVAL(ev(homo + 1:n_mo, :, 1))
-      CASE (2)
-         homo_1 = bs_env%n_occ(1)
-         lumo_1 = homo_1 + 1
-         homo_2 = bs_env%n_occ(2)
-         lumo_2 = homo_2 + 1
-         band_edges%VBM = MAX(MAXVAL(ev(1:homo_1, :, 1)), MAXVAL(ev(1:homo_2, :, 2)))
-         band_edges%CBM = MIN(MINVAL(ev(homo_1 + 1:n_mo, :, 1)), MINVAL(ev(homo_2 + 1:n_mo, :, 2)))
-      CASE DEFAULT
-         CPABORT("Error with number of spins.")
-      END SELECT
-
-      band_edges%IDBG = band_edges%CBM - band_edges%VBM
-
-      DO ispin = 1, bs_env%n_spin
-
-         homo = bs_env%n_occ(ispin)
-
-         DO ikp = 1, bs_env%nkp_bs_and_DOS
-
-            E_DBG_at_ikp = -MAXVAL(ev(1:homo, ikp, ispin)) + MINVAL(ev(homo + 1:n_mo, ikp, ispin))
-
-            IF (E_DBG_at_ikp < band_edges%DBG) band_edges%DBG = E_DBG_at_ikp
-
-         END DO
-
-      END DO
-
-      CALL timestop(handle)
-
-   END SUBROUTINE get_VBM_CBM_bandgaps_single
 
 END MODULE gw_utils
