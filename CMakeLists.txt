@@ -1071,7 +1071,7 @@ if(CP2K_BUILD_PYTHON_BINDINGS)
     python-bindings ALL
     COMMAND ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER} CFLAGS=${CMAKE_C_FLAGS} LDFLAGS=${CMAKE_EXE_LINKER_FLAGS} 
             ${Python_EXECUTABLE} setup.py build_ext --verbose --build-temp=${CMAKE_BINARY_DIR}/python-bindings --build-lib=${CMAKE_BINARY_DIR}/python-bindings 
-            --library-dirs=${CMAKE_INSTALL_PREFIX}/lib #--libraries=cp2k
+            --library-dirs=${CMAKE_BINARY_DIR}/src
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/start/python-bindings
     COMMENT "Building Python bindings"
     VERBATIM
