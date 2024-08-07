@@ -8,20 +8,23 @@
 #include <stdbool.h>
 
 /*******************************************************************************
- * \brief Definitions for the functions exported in libinitialize.F
+ * \brief Definitions for the functions exported in libversion.F
  * \author Joan Clark-Nicolas Aug 2024
  ******************************************************************************/
 
-#ifndef LIBINITIALIZE_H
-#define LIBINITIALIZE_H
+#ifndef LIBVERSION_H
+#define LIBVERSION_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 /*******************************************************************************
- * \brief Initialize CP2K and MPI if mpi_flag is true
+ * \brief Get the CP2K version stringand release year
+ * \param version_str The buffer to write the version string into
+ * \param str_length The size of the buffer (must be large enough)
  ******************************************************************************/
-void cp2k_init(bool init_mpi);
+void cp2k_get_version(char *version_str, int str_length);
+void cp2k_get_year(char *year_str, int str_length);
 #ifdef __cplusplus
 }
 #endif
