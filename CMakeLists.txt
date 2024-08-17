@@ -1070,12 +1070,12 @@ if(CP2K_BUILD_PYTHON_BINDINGS)
   add_custom_target(
     python-bindings ALL
     COMMAND ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER} CFLAGS=${CMAKE_C_FLAGS} LDFLAGS=${CMAKE_EXE_LINKER_FLAGS} 
-            ${Python_EXECUTABLE} setup.py build_ext --verbose --build-temp=${CMAKE_BINARY_DIR}/python-bindings --build-lib=${CMAKE_BINARY_DIR}/python-bindings 
+            ${Python_EXECUTABLE} setup.py build_ext --verbose --build-temp=${CMAKE_BINARY_DIR}/python --build-lib=${CMAKE_BINARY_DIR}/python 
             --library-dirs=${CMAKE_BINARY_DIR}/src
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/start/python-bindings
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/start/python
     COMMENT "Building Python bindings"
     VERBATIM
   )
   add_dependencies(python-bindings cp2k)
-  install(DIRECTORY ${CMAKE_BINARY_DIR}/python-bindings/ DESTINATION ${CMAKE_INSTALL_PREFIX}/python-bindings)
+  install(DIRECTORY ${CMAKE_BINARY_DIR}/python/ DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
 endif()
