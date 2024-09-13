@@ -44,6 +44,7 @@ case "${with_spla}" in
         -DCMAKE_INSTALL_LIBDIR=lib \
         -DCMAKE_VERBOSE_MAKEFILE=ON \
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DSPLA_FORTRAN=ON \
         -DSPLA_INSTALL=ON \
         -DSPLA_STATIC=ON \
@@ -63,6 +64,7 @@ case "${with_spla}" in
           -DCMAKE_VERBOSE_MAKEFILE=ON \
           -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
           -DSPLA_FORTRAN=ON \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
           -DSPLA_INSTALL=ON \
           -DSPLA_STATIC=ON \
           -DSPLA_GPU_BACKEND=CUDA \
@@ -89,6 +91,7 @@ case "${with_spla}" in
               -DSPLA_FORTRAN=ON \
               -DSPLA_INSTALL=ON \
               -DSPLA_STATIC=ON \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DSPLA_GPU_BACKEND=CUDA \
               .. \
               > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
@@ -109,6 +112,7 @@ case "${with_spla}" in
               -DSPLA_FORTRAN=ON \
               -DSPLA_INSTALL=ON \
               -DSPLA_STATIC=ON \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DSPLA_GPU_BACKEND=ROCM \
               .. \
               > cmake.log 2>&1 || tail -n ${LOG_LINES} cmake.log
@@ -167,6 +171,7 @@ prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
 EOF
   fi
   cat << EOF >> "${BUILDDIR}/setup_spla"
+export SPLA_VER="${spla_ver}"
 export SPLA_CFLAGS="${SPLA_CFLAGS}"
 export SPLA_LDFLAGS="${SPLA_LDFLAGS}"
 export SPLA_CUDA_LDFLAGS="${SPLA_CUDA_LDFLAGS}"
@@ -174,9 +179,8 @@ export SPLA_HIP_LDFLAGS="${SPLA_HIP_LDFLAGS}"
 export CP_DFLAGS="\${CP_DFLAGS} IF_HIP(-D__OFFLOAD_GEMM|) IF_CUDA(-D__OFFLOAD_GEMM|) ${OFFLOAD_DFLAGS} IF_MPI(-D__SPLA|)"
 export CP_CFLAGS="\${CP_CFLAGS} ${SPLA_CFLAGS}"
 export SPLA_LIBRARY="-lspla"
-export SPLA_ROOT="$pkg_install_dir"
-export SPLA_INCLUDE_DIR="$pkg_install_dir/include/spla"
-export SPLA_VERSION=${spla-ver}
+export SPLA_ROOT="${pkg_install_dir}"
+export SPLA_INCLUDE_DIR="${pkg_install_dir}/include/spla"
 export CP_LIBS="IF_MPI(${SPLA_LIBS}|) \${CP_LIBS}"
 EOF
   if [ "$ENABLE_HIP" = "__TRUE__" ]; then

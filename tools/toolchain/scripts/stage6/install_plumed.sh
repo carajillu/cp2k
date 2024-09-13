@@ -6,9 +6,9 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-plumed_ver="2.9.0"
+plumed_ver="2.9.2"
 plumed_pkg="plumed-src-${plumed_ver}.tgz"
-plumed_sha256="16e3fc77f2f4bc024bd279209e4dd49bfd8ed555325a0c868fe9c6b8fae19862"
+plumed_sha256="860e963e32b10a9edd932c33bb6a022975f45af74dc84b6afecd6242c45a0052"
 
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
@@ -97,8 +97,11 @@ if [ "$with_plumed" != "__DONTUSE__" ]; then
   else
     PLUMED_LIBS="-lplumed -ldl -lstdc++ -lz -ldl"
   fi
+  cat << EOF > "${BUILDDIR}/setup_plumed"
+export PLUMED_VER="${plumed_ver}"
+EOF
   if [ "$with_plumed" != "__SYSTEM__" ]; then
-    cat << EOF > "${BUILDDIR}/setup_plumed"
+    cat << EOF >> "${BUILDDIR}/setup_plumed"
 prepend_path LD_LIBRARY_PATH "$pkg_install_dir/lib"
 prepend_path LD_RUN_PATH "$pkg_install_dir/lib"
 prepend_path LIBRARY_PATH "$pkg_install_dir/lib"
@@ -107,14 +110,13 @@ prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
 EOF
     cat "${BUILDDIR}/setup_plumed" >> $SETUPFILE
   fi
-
   cat << EOF >> "${BUILDDIR}/setup_plumed"
 export PLUMED_LDFLAGS="${PLUMED_LDFLAGS}"
 export PLUMED_LIBS="${PLUMED_LIBS}"
 export CP_DFLAGS="\${CP_DFLAGS} IF_MPI(-D__PLUMED2|)"
 export CP_LDFLAGS="\${CP_LDFLAGS} IF_MPI(${PLUMED_LDFLAGS}|)"
 export CP_LIBS="IF_MPI(${PLUMED_LIBS}|) \${CP_LIBS}"
-export PLUMED_ROOT=${pkg_install_dir}
+export PLUMED_ROOT="${pkg_install_dir}"
 EOF
 fi
 

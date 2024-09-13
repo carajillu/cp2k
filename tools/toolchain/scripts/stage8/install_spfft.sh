@@ -50,6 +50,7 @@ case "${with_spfft}" in
         -DCMAKE_CXX_COMPILER="${MPICXX}" \
         -DCMAKE_VERBOSE_MAKEFILE=ON \
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DSPFFT_OMP=ON \
         -DSPFFT_MPI=ON \
         -DSPFFT_STATIC=ON \
@@ -75,6 +76,7 @@ case "${with_spfft}" in
           -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
           -DSPFFT_OMP=ON \
           -DSPFFT_MPI=ON \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
           -DSPFFT_STATIC=ON \
           -DSPFFT_FORTRAN=ON \
           -DSPFFT_INSTALL=ON \
@@ -178,11 +180,12 @@ prepend_path CPATH "$pkg_install_dir/include"
 export SPFFT_INCLUDE_DIR="$pkg_install_dir/include"
 export SPFFT_LIBS="-lspfft"
 export SPFFT_ROOT="${pkg_install_dir}"
-prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
-prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
+prepend_path PKG_CONFIG_PATH "${pkg_install_dir}/lib/pkgconfig"
+prepend_path CMAKE_PREFIX_PATH "${pkg_install_dir}"
 EOF
   fi
   cat << EOF >> "${BUILDDIR}/setup_spfft"
+export SPFFT_VER="${spfft_ver}"
 export SPFFT_CFLAGS="${SPFFT_CFLAGS}"
 export SPFFT_LDFLAGS="${SPFFT_LDFLAGS}"
 export SPFFT_CUDA_LDFLAGS="${SPFFT_CUDA_LDFLAGS}"
@@ -190,9 +193,8 @@ export CP_DFLAGS="\${CP_DFLAGS} IF_MPI(-D__SPFFT|)"
 export CP_CFLAGS="\${CP_CFLAGS} ${SPFFT_CFLAGS}"
 export CP_LDFLAGS="\${CP_LDFLAGS} IF_CUDA(${SPFFT_CUDA_LDFLAGS}|${SPFFT_LDFLAGS})"
 export SPFFT_LIBRARY="-lspfft"
-export SPFFT_ROOT="$pkg_install_dir"
-export SPFFT_INCLUDE_DIR="$pkg_install_dir/include"
-export SPFFT_VERSION=${spfft-ver}
+export SPFFT_ROOT="${pkg_install_dir}"
+export SPFFT_INCLUDE_DIR="${pkg_install_dir}/include"
 export CP_LIBS="IF_MPI(${SPFFT_LIBS}|) \${CP_LIBS}"
 EOF
   cat "${BUILDDIR}/setup_spfft" >> $SETUPFILE
