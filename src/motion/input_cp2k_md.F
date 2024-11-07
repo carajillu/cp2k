@@ -316,6 +316,10 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
+      CALL create_custom_force_eval_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
    END SUBROUTINE create_md_section
 
 ! **************************************************************************************************
@@ -1396,5 +1400,28 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
    END SUBROUTINE create_vib_init_section
+
+! **************************************************************************************************
+!> \brief Creates the CUSTOM_FORCE_EVAL section for ML training data generation
+!> \param section the section to be created
+!> \author Joan Clark-Nicolas 
+! **************************************************************************************************
+SUBROUTINE create_custom_force_eval_section(section)
+   TYPE(section_type), POINTER                        :: section
+   TYPE(keyword_type), POINTER                        :: keyword
+
+   CPASSERT(.NOT. ASSOCIATED(section))
+   CALL section_create(section, __LOCATION__, name="CUSTOM_FORCE_EVAL", &
+                     description="Performs additional force evaluations during MD run"// &
+                     " for generating ML training data", &
+                     n_keywords=1, n_subsections=0, repeats=.TRUE.)
+
+   NULLIFY (keyword)
+   CALL keyword_create(keyword, __LOCATION__, name="STRIDE", &
+                     description="Number of MD steps between custom force evaluations", &
+                     repeats=.FALSE., usage="STRIDE", default_i_val=1)
+   CALL section_add_keyword(section, keyword)
+   CALL keyword_release(keyword)
+END SUBROUTINE create_custom_force_eval_section   
 
 END MODULE input_cp2k_md
